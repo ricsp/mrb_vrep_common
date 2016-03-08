@@ -225,10 +225,10 @@ static void mdlInitializeSizes(SimStruct *S)
 //    ssSetNumPWork(S, 4); // Start + Stop + Synchronous + Trigger
 
     const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
-    if (timeout <= 0){
-    	ssSetNumPWork(S, 4); // Start + Stop + Synchronous + Trigger
+    if (timeout > 0){
+    	ssSetNumPWork(S, 6); // Start + Stop + Synchronous + Trigger services + wait_topic Subscriber + AsyncSpinner
     } else {
-    	ssSetNumPWork(S, 5); // Start + Stop + Synchronous + Trigger + Wait
+    	ssSetNumPWork(S, 4); // Start + Stop + Synchronous + Trigger
     }
 
     ssSetNumModes(S, 0);
@@ -382,14 +382,16 @@ static void mdlStart(SimStruct *S)
     	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
 		char* wait_name = (char*)mxMalloc(wait_buflen);
 		mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
-		const std::string semName = GenericSubscriber_base::generateSemaphoreName(std::string(wait_name));
-		//std::cout << "Opening semaphore /dev/shm/sem." << semName << std::endl;
-		sem_t * sem = sem_open(semName.c_str(), O_CREAT, 0644, 0);
-    	if (sem == SEM_FAILED){
-    		ssSetErrorStatus(S, strerror(errno));
-    	}
-		vecPWork[4] = sem;
+
+//		SFUNPRINTF("Subscribing to %s\n", wait_name);
+		GenericSubscriber<topic_tools::ShapeShifter>* sub
+		                = new GenericSubscriber<topic_tools::ShapeShifter>(nodeHandle, wait_name, 1);
 		mxFree(wait_name);
+		vecPWork[4] = sub;
+
+		ros::AsyncSpinner* spinner = new ros::AsyncSpinner(1);
+		spinner->start();
+		vecPWork[5] = spinner;
     }
 
 
@@ -427,15 +429,13 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 
 	  const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
 	  sem_t * sem = (sem_t*)vecPWork[4];
-	  // wait topic name
-	  timespec waitSpec;
+
+	  GenericSubscriber<topic_tools::ShapeShifter>* sub;
 
 	  if (timeout > 0){
-		  //std::cout << "resetting semaphore...";
-		  GenericSubscriber_base::resetSemaphore(sem);
-		  int valp;
-		  sem_getvalue(sem, &valp);
-		  //std::cout << " now at" << valp << std::endl;
+		  sub = static_cast< GenericSubscriber<topic_tools::ShapeShifter>* >(vecPWork[4]);
+//		  SFUNPRINTF("Resetting semaphore...\n");
+		  sub->resetSem();
 	  }
 
 	  vrep_common::simRosSynchronousTrigger trigSrv;
@@ -446,19 +446,17 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 	  }
 
 	  if (timeout > 0){
-		  const int wait_sec = (int) timeout;
-		  const int wait_nsec = (int)((timeout - (int)timeout)*1e9);
-		  //std::cout << "Waiting for message for " << wait_sec << " sec and " << wait_nsec << " nsec" << std::endl;
-		  clock_gettime(CLOCK_REALTIME, &waitSpec);
-		  waitSpec.tv_sec += wait_sec;
-		  waitSpec.tv_nsec += wait_nsec;
-		  const int result = sem_timedwait(sem, &waitSpec);
-		  if (result == ETIMEDOUT){
+		  const int result = sub->waitMsg(timeout);
+		  if (result == -1){
 			  ssWarning(S, "Timeout expired");
 		  } else {
-			  //std::cout << "Message arrived. Waiting extra " << mxGetScalar(ssGetSFcnParam(S, 4)) << " sec" << std::endl;
-			  ros::Duration extra_wait(mxGetScalar(ssGetSFcnParam(S, 4)));
-			  extra_wait.sleep();
+//			  SFUNPRINTF("Message arrived.\n");
+			  const real_T extraWaitTime = mxGetScalar(ssGetSFcnParam(S, 4));
+			  if (extraWaitTime>0){
+//				  SFUNPRINTF("Waiting extra %f seconds\n", extraWaitTime);
+				  ros::Duration extra_wait(extraWaitTime);
+				  extra_wait.sleep();
+			  }
 		  }
 	  }
   }
@@ -516,15 +514,13 @@ static void mdlTerminate(SimStruct *S)
     ros::ServiceClient* trigger_client = (ros::ServiceClient*)vecPWork[3];
     delete trigger_client;
 
-    if (ssGetNumPWork(S) == 5){
-    	sem_t * sem = static_cast<sem_t*>(vecPWork[4]);
-    	sem_close(sem);
-    	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
-		char* wait_name = (char*)mxMalloc(wait_buflen);
-		mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
-		const std::string semName = GenericSubscriber_base::generateSemaphoreName(std::string(wait_name));
-    	sem_unlink(semName.c_str());
-    	mxFree(wait_name);
+    const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
+    if (timeout>0){
+    	GenericSubscriber<topic_tools::ShapeShifter>* sub =
+    			static_cast< GenericSubscriber<topic_tools::ShapeShifter>* >(vecPWork[4]);
+    	delete sub;
+    	ros::AsyncSpinner* spinner = static_cast<ros::AsyncSpinner*>(vecPWork[5]);
+		delete spinner;
     }
 
     SFUNPRINTF("Terminating Instance of %s.\n", TOSTRING(S_FUNCTION_NAME));
