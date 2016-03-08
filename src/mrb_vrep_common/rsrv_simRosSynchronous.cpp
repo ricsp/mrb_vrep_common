@@ -47,7 +47,7 @@
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
 
-
+#define TOPIC_SEPARATORS " ,.;"
 #define ROUND(x) floor( x + 0.5 )
 
 
@@ -82,17 +82,17 @@
 
 #define MDL_CHECK_PARAMETERS
 #if defined(MDL_CHECK_PARAMETERS) && defined(MATLAB_MEX_FILE)
-  /* Function: mdlCheckParameters =============================================
-   * Abstract:
-   *    Validate our parameters to verify:
-   *     o The numerator must be of a lower order than the denominator.
-   *     o The sample time must be a real positive nonzero value.
-   */
-  static void mdlCheckParameters(SimStruct *S)
-  {
+/* Function: mdlCheckParameters =============================================
+ * Abstract:
+ *    Validate our parameters to verify:
+ *     o The numerator must be of a lower order than the denominator.
+ *     o The sample time must be a real positive nonzero value.
+ */
+static void mdlCheckParameters(SimStruct *S)
+{
 	//  SFUNPRINTF("Calling mdlCheckParameters");
-    
-    // Tsim
+
+	// Tsim
 	if (mxIsEmpty( ssGetSFcnParam(S,0)) ||
 			mxIsSparse( ssGetSFcnParam(S,0)) ||
 			mxIsComplex( ssGetSFcnParam(S,0)) ||
@@ -139,8 +139,8 @@
 		ssSetErrorStatus(S,"Extra wait time must be a single double Value");
 		return;
 	}
-    
-  }
+
+}
 #endif /* MDL_CHECK_PARAMETERS */
 
 
@@ -183,61 +183,49 @@
  */
 static void mdlInitializeSizes(SimStruct *S)
 {
-    /* See sfuntmpl_doc.c for more details on the macros below */
+	/* See sfuntmpl_doc.c for more details on the macros below */
 
-    ssSetNumSFcnParams(S, 5);  /* Number of expected parameters */
+	ssSetNumSFcnParams(S, 5);  /* Number of expected parameters */
 #if defined(MATLAB_MEX_FILE)
-    if (ssGetNumSFcnParams(S) == ssGetSFcnParamsCount(S)) {
-        mdlCheckParameters(S);
-        if (ssGetErrorStatus(S) != NULL) {
-            return;
-        }
-    } else {
-        return; /* Parameter mismatch will be reported by Simulink. */
-    }
+	if (ssGetNumSFcnParams(S) == ssGetSFcnParamsCount(S)) {
+		mdlCheckParameters(S);
+		if (ssGetErrorStatus(S) != NULL) {
+			return;
+		}
+	} else {
+		return; /* Parameter mismatch will be reported by Simulink. */
+	}
 #endif
 
-//    int_T nRobots = mxGetNumberOfElements(ssGetSFcnParam(S,2));
+	ssSetNumContStates(S, 0);
+	ssSetNumDiscStates(S, 0);
 
-    ssSetNumContStates(S, 0);
-    ssSetNumDiscStates(S, 0);
+	if (!ssSetNumInputPorts(S, 0)) return;
+	if (!ssSetNumOutputPorts(S, 0)) return;
 
-    if (!ssSetNumInputPorts(S, 0)) return;
+	ssSetNumSampleTimes(S, 1);
+	ssSetNumRWork(S, 0);
+	ssSetNumIWork(S, 1); // nWaitTopic
 
-	for (int_T i = 0; i < ssGetNumInputPorts(S); ++i) {
-		/*direct input signal access*/
-    	ssSetInputPortRequiredContiguous(S, i, true); 
-		
-		/*
-		 * Set direct feedthrough flag (1=yes, 0=no).
-		 * A port has direct feedthrough if the input is used in either
-		 * the mdlOutputs or mdlGetTimeOfNextVarHit functions.
-		 * See matlabroot/simulink/src/sfuntmpl_directfeed.txt.
-		 */
-		ssSetInputPortDirectFeedThrough(S, i, 1);
+	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
+	char* wait_name = (char*)mxMalloc(wait_buflen);
+	mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
+	char * topic = strtok(wait_name, TOPIC_SEPARATORS);
+	unsigned int nWaitTopic = 0;
+	while (topic != NULL){
+		nWaitTopic++;
+		topic = strtok(NULL, TOPIC_SEPARATORS);
 	}
+	mxFree(wait_name);
+	ssSetNumPWork(S, 4+nWaitTopic+1); //Start + Stop + Synchronous + Trigger services + wait_topic Subscriber(s) + AsyncSpinner
 
-    if (!ssSetNumOutputPorts(S, 0)) return;
+	ssSetNumModes(S, 0);
+	ssSetNumNonsampledZCs(S, 0);
 
-    ssSetNumSampleTimes(S, 1);
-    ssSetNumRWork(S, 0);
-    ssSetNumIWork(S, 0);
-//    ssSetNumPWork(S, 4); // Start + Stop + Synchronous + Trigger
+	/* Specify the sim state compliance to be same as a built-in block */
+	ssSetSimStateCompliance(S, USE_DEFAULT_SIM_STATE);
 
-    const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
-    if (timeout <= 0){
-    	ssSetNumPWork(S, 4); // Start + Stop + Synchronous + Trigger
-    } else {
-    	ssSetNumPWork(S, 5); // Start + Stop + Synchronous + Trigger + Wait
-    }
-
-    ssSetNumModes(S, 0);
-    ssSetNumNonsampledZCs(S, 0);
-
-    /* Specify the sim state compliance to be same as a built-in block */
-    ssSetSimStateCompliance(S, USE_DEFAULT_SIM_STATE);
-
-    ssSetOptions(S, 0);
+	ssSetOptions(S, 0);
 }
 
 
@@ -251,9 +239,9 @@ static void mdlInitializeSizes(SimStruct *S)
 
 static void mdlInitializeSampleTimes(SimStruct *S)
 {
-    const real_T Tsim = mxGetScalar(ssGetSFcnParam(S, 0));
-    ssSetSampleTime(S, 0, Tsim);                      //DISCRETE_SAMPLE_TIME);
-    ssSetOffsetTime(S, 0, 0.0);
+	const real_T Tsim = mxGetScalar(ssGetSFcnParam(S, 0));
+	ssSetSampleTime(S, 0, Tsim);                      //DISCRETE_SAMPLE_TIME);
+	ssSetOffsetTime(S, 0, 0.0);
 
 }
 
@@ -261,85 +249,92 @@ static void mdlInitializeSampleTimes(SimStruct *S)
 
 #define MDL_INITIALIZE_CONDITIONS   /* Change to #undef to remove function */
 #if defined(MDL_INITIALIZE_CONDITIONS)
-  /* Function: mdlInitializeConditions ========================================
-   * Abstract:
-   *    In this function, you should initialize the continuous and discrete
-   *    states for your S-function block.  The initial states are placed
-   *    in the state vector, ssGetContStates(S) or ssGetRealDiscStates(S).
-   *    You can also perform any other initialization activities that your
-   *    S-function may require. Note, this routine will be called at the
-   *    start of simulation and if it is present in an enabled subsystem
-   *    configured to reset states, it will be call when the enabled subsystem
-   *    restarts execution to reset the states.
-   */
-  static void mdlInitializeConditions(SimStruct *S)
-  {
-  }
+/* Function: mdlInitializeConditions ========================================
+ * Abstract:
+ *    In this function, you should initialize the continuous and discrete
+ *    states for your S-function block.  The initial states are placed
+ *    in the state vector, ssGetContStates(S) or ssGetRealDiscStates(S).
+ *    You can also perform any other initialization activities that your
+ *    S-function may require. Note, this routine will be called at the
+ *    start of simulation and if it is present in an enabled subsystem
+ *    configured to reset states, it will be call when the enabled subsystem
+ *    restarts execution to reset the states.
+ */
+static void mdlInitializeConditions(SimStruct *S)
+{
+}
 #endif /* MDL_INITIALIZE_CONDITIONS */
 
 #define MDL_START  /* Change to #undef to remove function */
 #if defined(MDL_START) 
-  /* Function: mdlStart =======================================================
-   * Abstract:
-   *    This function is called once at start of model execution. If you
-   *    have states that should be initialized once, this is the place
-   *    to do it.
-   */
+/* Function: mdlStart =======================================================
+ * Abstract:
+ *    This function is called once at start of model execution. If you
+ *    have states that should be initialized once, this is the place
+ *    to do it.
+ */
 
 static void mdlStart(SimStruct *S)
 {   
-    SFUNPRINTF("Starting Instance of %s.\n", TOSTRING(S_FUNCTION_NAME));
-    // init ROS if not yet done.
-    initROS(S);
+	SFUNPRINTF("Starting Instance of %s.\n", TOSTRING(S_FUNCTION_NAME));
+	// init ROS if not yet done.
+	initROS(S);
 
-    void** vecPWork = ssGetPWork(S);
+	void** vecPWork = ssGetPWork(S);
 
-    ros::NodeHandle nodeHandle(ros::this_node::getName());
+	ros::NodeHandle nodeHandle(ros::this_node::getName());
 
-    // get base service name strings
-    size_t buflen = mxGetN((ssGetSFcnParam(S, 1)))*sizeof(mxChar)+1;
-    char* base_name = (char*)mxMalloc(buflen);
-    mxGetString((ssGetSFcnParam(S, 1)), base_name, buflen);
+	// get base service name strings
+	size_t buflen = mxGetN((ssGetSFcnParam(S, 1)))*sizeof(mxChar)+1;
+	char* base_name = (char*)mxMalloc(buflen);
+	mxGetString((ssGetSFcnParam(S, 1)), base_name, buflen);
 
-    const std::string start_name = std::string(base_name) + "/simRosStartSimulation";
-    ros::ServiceClient* start_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosStartSimulation>(start_name));
-    vecPWork[0] = start_client;
-    if (!start_client->exists()){
-        ssSetErrorStatus(S,"Start service does not exist!");
-    }
+	const std::string start_name = std::string(base_name) + "/simRosStartSimulation";
+	ros::ServiceClient* start_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosStartSimulation>(start_name));
+	vecPWork[0] = start_client;
+	if (!start_client->exists()){
+		ssSetErrorStatus(S,"Start service does not exist!");
+	}
 
-    const std::string stop_name = std::string(base_name) + "/simRosStopSimulation";
-    ros::ServiceClient* stop_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosStopSimulation>(stop_name));
-    vecPWork[1] = stop_client;
-    if (!stop_client->exists()){
-        ssSetErrorStatus(S,"Stop service does not exist!");
-    }
+	const std::string stop_name = std::string(base_name) + "/simRosStopSimulation";
+	ros::ServiceClient* stop_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosStopSimulation>(stop_name));
+	vecPWork[1] = stop_client;
+	if (!stop_client->exists()){
+		ssSetErrorStatus(S,"Stop service does not exist!");
+	}
 
-    const std::string synchronous_name = std::string(base_name) + "/simRosSynchronous";
-    ros::ServiceClient* synchronous_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSynchronous>(synchronous_name));
+	const std::string synchronous_name = std::string(base_name) + "/simRosSynchronous";
+	ros::ServiceClient* synchronous_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSynchronous>(synchronous_name));
 	vecPWork[2] = synchronous_client;
 	if (!synchronous_client->exists()){
 		ssSetErrorStatus(S,"Synchronous service does not exist!");
 	}
 
 	const std::string trigger_name = std::string(base_name) + "/simRosSynchronousTrigger";
-    ros::ServiceClient* trigger_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSynchronousTrigger>(trigger_name));
+	ros::ServiceClient* trigger_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSynchronousTrigger>(trigger_name));
 	vecPWork[3] = trigger_client;
 	if (!trigger_client->exists()){
 		ssSetErrorStatus(S,"Trigger service does not exist!");
 	}
 
 	const std::string info_name = std::string(base_name) + "/simRosGetInfo";
-    ros::ServiceClient* info_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosGetInfo>(info_name));
+	ros::ServiceClient* info_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosGetInfo>(info_name));
 	if (!info_client->exists()){
 		ssSetErrorStatus(S,"Info service does not exist!");
 	}
 
-    const std::string parameter_name = std::string(base_name) + "/simRosSetFloatingParameter";
-	ros::ServiceClient* parameter_client = new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSetFloatingParameter>(parameter_name));
+	const std::string parameter_name = std::string(base_name) + "/simRosSetFloatingParameter";
+	ros::ServiceClient* parameter_client =
+			new ros::ServiceClient(nodeHandle.serviceClient<vrep_common::simRosSetFloatingParameter>(parameter_name));
 	if (!parameter_client->exists()){
 		ssSetErrorStatus(S,"Set parameter service does not exist!");
 	}
+	mxFree(base_name);
 
 	// Set V-Rep time step to this block time step
 	const real_T tSim = mxGetScalar(ssGetSFcnParam(S, 0));
@@ -371,32 +366,37 @@ static void mdlStart(SimStruct *S)
 	}
 
 	// Start V-Rep simulation
-    vrep_common::simRosStartSimulation startSrv;
-    start_client->call(startSrv);
-    if (startSrv.response.result == -1){
+	vrep_common::simRosStartSimulation startSrv;
+	start_client->call(startSrv);
+	if (startSrv.response.result == -1){
 		ssSetErrorStatus(S,"Error starting V-REP simulation.");
 	}
 
-    const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
-    if (timeout > 0){
-    	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
-		char* wait_name = (char*)mxMalloc(wait_buflen);
-		mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
-		const std::string semName = GenericSubscriber_base::generateSemaphoreName(std::string(wait_name));
-		//std::cout << "Opening semaphore /dev/shm/sem." << semName << std::endl;
-		sem_t * sem = sem_open(semName.c_str(), O_CREAT, 0644, 0);
-    	if (sem == SEM_FAILED){
-    		ssSetErrorStatus(S, strerror(errno));
-    	}
-		vecPWork[4] = sem;
-		mxFree(wait_name);
-    }
+	// Subscribe to all the topics to wait
+	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
+	char* wait_name = (char*)mxMalloc(wait_buflen);
+	mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
 
+	int_T nWaitTopic = 0;
+	char* topic = strtok(wait_name, TOPIC_SEPARATORS);
+	while(topic != NULL){
+		GenericSubscriber<topic_tools::ShapeShifter>* sub
+			= new GenericSubscriber<topic_tools::ShapeShifter>(nodeHandle, topic, 1);
+		vecPWork[4+nWaitTopic] = sub;
+		nWaitTopic++;
+		topic = strtok (NULL, TOPIC_SEPARATORS);
+	}
 
+	if (nWaitTopic>0){
+		ros::AsyncSpinner* spinner = new ros::AsyncSpinner(nWaitTopic);
+		spinner->start();
+		vecPWork[4+nWaitTopic] = spinner;
+		ssGetIWork(S)[0] = nWaitTopic;
+	}
 
-    // free char array
-    mxFree(base_name);
-  }
+	mxFree(wait_name);
+
+}
 #endif /*  MDL_START */
 
 
@@ -413,69 +413,70 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 
 #define MDL_UPDATE  /* Change to #undef to remove function */
 #if defined(MDL_UPDATE)
-  /* Function: mdlUpdate ======================================================
-   * Abstract:
-   *    This function is called once for every major integration time step.
-   *    Discrete states are typically updated here, but this function is useful
-   *    for performing any tasks that should only take place once per
-   *    integration step.
-   */
-  static void mdlUpdate(SimStruct *S, int_T tid)
-  {
-	  void** vecPWork = ssGetPWork(S);
-	  ros::ServiceClient* trigger_client = (ros::ServiceClient*)vecPWork[3];
+/* Function: mdlUpdate ======================================================
+ * Abstract:
+ *    This function is called once for every major integration time step.
+ *    Discrete states are typically updated here, but this function is useful
+ *    for performing any tasks that should only take place once per
+ *    integration step.
+ */
+static void mdlUpdate(SimStruct *S, int_T tid)
+{
+	void** vecPWork = ssGetPWork(S);
+	ros::ServiceClient* trigger_client = (ros::ServiceClient*)vecPWork[3];
 
-	  const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
-	  sem_t * sem = (sem_t*)vecPWork[4];
-	  // wait topic name
-	  timespec waitSpec;
+	const real_T timeout = mxGetScalar(ssGetSFcnParam(S, 3));
 
-	  if (timeout > 0){
-		  //std::cout << "resetting semaphore...";
-		  GenericSubscriber_base::resetSemaphore(sem);
-		  int valp;
-		  sem_getvalue(sem, &valp);
-		  //std::cout << " now at" << valp << std::endl;
-	  }
+	const int_T nWaitTopic = ssGetIWork(S)[0];
 
-	  vrep_common::simRosSynchronousTrigger trigSrv;
-	  trigger_client->call(trigSrv);
+	// reset all semaphores
+	for (int_T i = 0; i<nWaitTopic; ++i){
+		GenericSubscriber<topic_tools::ShapeShifter>* sub =
+				(GenericSubscriber<topic_tools::ShapeShifter>*) vecPWork[4+i];
+		sub->resetSem();
+	}
 
-	  if (trigSrv.response.result == -1){
-		  ssSetErrorStatus(S, "Error triggering V-REP simulation");
-	  }
+	vrep_common::simRosSynchronousTrigger trigSrv;
+	trigger_client->call(trigSrv);
 
-	  if (timeout > 0){
-		  const int wait_sec = (int) timeout;
-		  const int wait_nsec = (int)((timeout - (int)timeout)*1e9);
-		  //std::cout << "Waiting for message for " << wait_sec << " sec and " << wait_nsec << " nsec" << std::endl;
-		  clock_gettime(CLOCK_REALTIME, &waitSpec);
-		  waitSpec.tv_sec += wait_sec;
-		  waitSpec.tv_nsec += wait_nsec;
-		  const int result = sem_timedwait(sem, &waitSpec);
-		  if (result == ETIMEDOUT){
-			  ssWarning(S, "Timeout expired");
-		  } else {
-			  //std::cout << "Message arrived. Waiting extra " << mxGetScalar(ssGetSFcnParam(S, 4)) << " sec" << std::endl;
-			  ros::Duration extra_wait(mxGetScalar(ssGetSFcnParam(S, 4)));
-			  extra_wait.sleep();
-		  }
-	  }
-  }
+	if (trigSrv.response.result == -1){
+		ssSetErrorStatus(S, "Error triggering V-REP simulation");
+	}
+
+	// wait for all messages
+	for (int_T i = 0; i<nWaitTopic; ++i){
+		GenericSubscriber<topic_tools::ShapeShifter>* sub =
+				(GenericSubscriber<topic_tools::ShapeShifter>*) vecPWork[4+i];
+		if (sub->waitMsg(timeout) == -1){
+			const std::string tmp = std::string("Timeout expired for topic ") + sub->getTopicName();
+			ssWarning(S, tmp.c_str());
+		} else {
+		}
+	}
+
+	const real_T extraWaitTime = mxGetScalar(ssGetSFcnParam(S, 4));
+	if (extraWaitTime>0){
+		//				  SFUNPRINTF("Waiting extra %f seconds\n", extraWaitTime);
+		ros::Duration extra_wait(extraWaitTime);
+		extra_wait.sleep();
+
+	}
+
+}
 #endif /* MDL_UPDATE */
 
 
 
 #define MDL_DERIVATIVES  /* Change to #undef to remove function */
 #if defined(MDL_DERIVATIVES)
-  /* Function: mdlDerivatives =================================================
-   * Abstract:
-   *    In this function, you compute the S-function block's derivatives.
-   *    The derivatives are placed in the derivative vector, ssGetdX(S).
-   */
-  static void mdlDerivatives(SimStruct *S)
-  {
-  }
+/* Function: mdlDerivatives =================================================
+ * Abstract:
+ *    In this function, you compute the S-function block's derivatives.
+ *    The derivatives are placed in the derivative vector, ssGetdX(S).
+ */
+static void mdlDerivatives(SimStruct *S)
+{
+}
 #endif /* MDL_DERIVATIVES */
 
 
@@ -488,46 +489,49 @@ static void mdlOutputs(SimStruct *S, int_T tid)
  */
 static void mdlTerminate(SimStruct *S)
 {
-    // get Objects
-    ros::NodeHandle nodeHandle(ros::this_node::getName());
+	// get Objects
+	ros::NodeHandle nodeHandle(ros::this_node::getName());
 
-    void** vecPWork = ssGetPWork(S);
+	void** vecPWork = ssGetPWork(S);
 
-    ros::ServiceClient* start_client = (ros::ServiceClient*)vecPWork[0];
-    delete start_client;
+	ros::ServiceClient* start_client = (ros::ServiceClient*)vecPWork[0];
+	delete start_client;
 
-    ros::ServiceClient* stop_client = (ros::ServiceClient*)vecPWork[1];
+	ros::ServiceClient* stop_client = (ros::ServiceClient*)vecPWork[1];
+	vrep_common::simRosStopSimulation stopSrv;
+	stop_client->call(stopSrv);
+	if (stopSrv.response.result == -1){
+		ssWarning(S,"Error stopping V-REP simulation.");
+	}
+	delete stop_client;
 
-    vrep_common::simRosStopSimulation srv;
-    stop_client->call(srv);
-
-    SFUNPRINTF("Calling stopping service in %s. Result: %d\n", TOSTRING(S_FUNCTION_NAME), srv.response.result);
-    delete stop_client;
-
-    ros::ServiceClient* synchronous_client = (ros::ServiceClient*)vecPWork[2];
-    vrep_common::simRosSynchronous syncSrv;
+	ros::ServiceClient* synchronous_client = (ros::ServiceClient*)vecPWork[2];
+	vrep_common::simRosSynchronous syncSrv;
 	syncSrv.request.enable = false;
 	synchronous_client->call(syncSrv);
 	if (syncSrv.response.result == -1){
-		ssSetErrorStatus(S,"Error setting V-REP synchronous simulation mode.");
+		ssWarning(S,"Error setting V-REP synchronous simulation mode.");
 	}
-    delete synchronous_client;
+	delete synchronous_client;
 
-    ros::ServiceClient* trigger_client = (ros::ServiceClient*)vecPWork[3];
-    delete trigger_client;
+	ros::ServiceClient* trigger_client = (ros::ServiceClient*)vecPWork[3];
+	delete trigger_client;
 
-    if (ssGetNumPWork(S) == 5){
-    	sem_t * sem = static_cast<sem_t*>(vecPWork[4]);
-    	sem_close(sem);
-    	size_t wait_buflen = mxGetN((ssGetSFcnParam(S, 2)))*sizeof(mxChar)+1;
-		char* wait_name = (char*)mxMalloc(wait_buflen);
-		mxGetString((ssGetSFcnParam(S, 2)), wait_name, wait_buflen);
-		const std::string semName = GenericSubscriber_base::generateSemaphoreName(std::string(wait_name));
-    	sem_unlink(semName.c_str());
-    	mxFree(wait_name);
-    }
+	// delete all subscribers and spinners
+	const int_T nWaitTopic = ssGetIWork(S)[0];
+	for (int_T i = 0; i<nWaitTopic; ++i){
+		GenericSubscriber<topic_tools::ShapeShifter>* sub =
+				(GenericSubscriber<topic_tools::ShapeShifter>*) vecPWork[4+i];
+		delete sub;
+	}
 
-    SFUNPRINTF("Terminating Instance of %s.\n", TOSTRING(S_FUNCTION_NAME));
+	if (nWaitTopic>0){
+		ros::AsyncSpinner* spinner =
+				(ros::AsyncSpinner*) vecPWork[4+nWaitTopic];
+		delete spinner;
+	}
+
+	SFUNPRINTF("Terminating Instance of %s.\n", TOSTRING(S_FUNCTION_NAME));
 }
 
 
