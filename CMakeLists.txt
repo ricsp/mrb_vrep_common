@@ -157,6 +157,7 @@ include_directories(
 set(SOURCES
   rsrv_simRosStartStopSimulation.cpp
   rsrv_simRosSynchronous.cpp
+  rmsg_sub_VisionSensorDepthBuff.cpp
 )
 
 string(FIND ${CATKIN_DEVEL_PREFIX} ${PROJECT_NAME} FoundPosition REVERSE)
